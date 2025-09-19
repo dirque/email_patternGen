@@ -1,26 +1,110 @@
 // Code35 Integration Script
-// Add this after your existing deduplication logic
-
 // Configuration
 const EMAIL_API_URL = 'http://localhost:8000';
-const BATCH_SIZE = 50; // Process 50 leads at a time
-const REQUEST_DELAY = 100; // 100ms delay between batches to avoid overwhelming API
+const BATCH_SIZE = 50;
+const REQUEST_DELAY = 100;
+const ENABLE_VERIFICATION = false; // Set to true to enable email verification
 
-// Email enrichment function
-async function enrichLeadsWithEmails(uniqueLeads) {
-    console.log(`🚀 Starting email enrichment for ${uniqueLeads.length} leads...`);
+// STEP 1: VALIDATION - Pre-validate leads before API calls
+function validateLead(lead) {
+    const errors = [];
     
+    // Check firstName (required)
+    if (!lead.firstName || typeof lead.firstName !== 'string' || lead.firstName.trim().length < 2) {
+        errors.push('firstName required (min 2 chars)');
+    }
+    
+    // Check companyDomain (required)  
+    if (!lead.companyDomain || typeof lead.companyDomain !== 'string') {
+        errors.push('companyDomain required');
+    } else {
+        // Clean and validate domain format
+        const domain = cleanDomain(lead.companyDomain);
+        if (!isValidDomain(domain)) {
+            errors.push('invalid domain format');
+        }
+    }
+    
+    return {
+        isValid: errors.length === 0,
+        errors,
+        cleanedLead: errors.length === 0 ? cleanLead(lead) : null
+    };
+}
+
+function cleanDomain(domain) {
+    if (!domain) return '';
+    let cleaned = domain.toLowerCase().trim();
+    cleaned = cleaned.replace(/^https?:\/\//, '');
+    cleaned = cleaned.replace(/^www\./, '');
+    cleaned = cleaned.split('/')[0];
+    cleaned = cleaned.split(':')[0];
+    return cleaned;
+}
+
+function isValidDomain(domain) {
+    const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.[a-zA-Z]{2,}$/;
+    return domainRegex.test(domain) && domain.length >= 4;
+}
+
+function cleanLead(lead) {
+    const cleaned = { ...lead };
+    if (cleaned.firstName) cleaned.firstName = cleaned.firstName.trim();
+    if (cleaned.lastName) cleaned.lastName = cleaned.lastName.trim();  
+    if (cleaned.companyDomain) cleaned.companyDomain = cleanDomain(cleaned.companyDomain);
+    if (cleaned.companyName) cleaned.companyName = cleaned.companyName.trim();
+    if (cleaned.companyIndustry) cleaned.companyIndustry = cleaned.companyIndustry.trim();
+    return cleaned;
+}
+
+function validateBatch(leads) {
+    console.log(`Validating ${leads.length} leads...`);
+    
+    const results = leads.map((lead, index) => ({
+        ...validateLead(lead),
+        originalIndex: index
+    }));
+    
+    const validLeads = results.filter(r => r.isValid).map(r => r.cleanedLead);
+    const invalidLeads = results.filter(r => !r.isValid);
+    
+    const successRate = (validLeads.length / leads.length * 100).toFixed(1);
+    console.log(`Validation: ${validLeads.length}/${leads.length} valid (${successRate}%)`);
+    
+    if (invalidLeads.length > 0) {
+        console.log(`Invalid leads sample:`, invalidLeads.slice(0, 3).map(invalid => ({
+            lead: leads[invalid.originalIndex],
+            errors: invalid.errors
+        })));
+    }
+    
+    return { validLeads, invalidLeads };
+}
+
+// STEP 2: ENRICHMENT - Your existing email generation (enhanced)
+async function enrichLeadsWithEmails(uniqueLeads) {
+    console.log(`Starting email enrichment for ${uniqueLeads.length} leads...`);
+    
+    // Step 2a: Validate leads first
+    const { validLeads, invalidLeads } = validateBatch(uniqueLeads);
+    
+    if (validLeads.length === 0) {
+        console.log(`No valid leads to process`);
+        return createFinalResults([], invalidLeads, uniqueLeads);
+    }
+    
+    // Step 2b: Process valid leads through your existing email generation
     const enrichedResults = [];
     let totalSuccessful = 0;
     let totalFailed = 0;
     
     // Process leads in batches
-    for (let i = 0; i < uniqueLeads.length; i += BATCH_SIZE) {
-        const batch = uniqueLeads.slice(i, i + BATCH_SIZE);
+    for (let i = 0; i < validLeads.length; i += BATCH_SIZE) {
+        const batch = validLeads.slice(i, i + BATCH_SIZE);
         const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
-        const totalBatches = Math.ceil(uniqueLeads.length / BATCH_SIZE);
+        const totalBatches = Math.ceil(validLeads.length / BATCH_SIZE);
         
-        console.log(`📦 Processing batch ${batchNumber}/${totalBatches} (${batch.length} leads)`);
+        console.log(`Processing batch ${batchNumber}/${totalBatches} (${batch.length} leads)`);
         
         try {
             const response = await fetch(`${EMAIL_API_URL}/enrich-leads-batch`, {
@@ -38,17 +122,18 @@ async function enrichLeadsWithEmails(uniqueLeads) {
             const batchResult = await response.json();
             
             if (batchResult.success) {
-                enrichedResults.push(...batchResult.enriched_leads);
-                totalSuccessful += batchResult.successful_generations;
-                totalFailed += batchResult.failed_generations;
+                const results = batchResult.enriched_leads || batchResult.results || [];
+                enrichedResults.push(...results);
+                totalSuccessful += batchResult.successful_generations || 0;
+                totalFailed += batchResult.failed_generations || 0;
                 
-                console.log(`✅ Batch ${batchNumber} completed: ${batchResult.successful_generations}/${batch.length} emails generated`);
+                console.log(`Batch ${batchNumber} completed: ${batchResult.successful_generations}/${batch.length} emails generated`);
             } else {
                 throw new Error('Batch processing failed');
             }
             
         } catch (error) {
-            console.error(`❌ Batch ${batchNumber} failed:`, error.message);
+            console.error(`Batch ${batchNumber} failed:`, error.message);
             
             // Add original leads without email data if API call fails
             const fallbackLeads = batch.map(lead => ({
@@ -62,23 +147,105 @@ async function enrichLeadsWithEmails(uniqueLeads) {
             
             enrichedResults.push(...fallbackLeads);
             totalFailed += batch.length;
-            
-            console.log(`⚠️  Added ${batch.length} leads without emails due to API error`);
         }
         
         // Small delay between batches to avoid overwhelming the API
-        if (i + BATCH_SIZE < uniqueLeads.length) {
+        if (i + BATCH_SIZE < validLeads.length) {
             await new Promise(resolve => setTimeout(resolve, REQUEST_DELAY));
         }
     }
     
-    // Final summary
-    console.log(`\n📊 Email Enrichment Summary:`);
-    console.log(`   Total leads processed: ${uniqueLeads.length}`);
-    console.log(`   Emails generated: ${totalSuccessful} (${(totalSuccessful/uniqueLeads.length*100).toFixed(1)}%)`);
-    console.log(`   Failed generations: ${totalFailed} (${(totalFailed/uniqueLeads.length*100).toFixed(1)}%)`);
+    console.log(`Email enrichment completed: ${totalSuccessful}/${validLeads.length} successful`);
     
-    return enrichedResults;
+    // Step 2c: Optional verification
+    const finalResults = ENABLE_VERIFICATION ? 
+        await verifyEmails(enrichedResults) : 
+        enrichedResults;
+    
+    // Step 2d: Combine with invalid leads
+    return createFinalResults(finalResults, invalidLeads, uniqueLeads);
+}
+
+// STEP 3: VERIFICATION - Email verification (optional)
+async function verifyEmails(enrichedLeads) {
+    if (!ENABLE_VERIFICATION) {
+        return enrichedLeads;
+    }
+    
+    console.log(`Starting email verification for ${enrichedLeads.length} leads...`);
+    
+    const leadsWithEmails = enrichedLeads.filter(lead => lead.generatedEmail);
+    console.log(`Verifying ${leadsWithEmails.length} generated emails...`);
+    
+    // Simple verification based on confidence score (replace with real verification service)
+    const verifiedLeads = enrichedLeads.map(lead => {
+        if (lead.generatedEmail) {
+            const isVerified = lead.emailConfidence > 0.7; // Heuristic - replace with real verification
+            
+            return {
+                ...lead,
+                emailVerified: isVerified,
+                emailVerificationStatus: isVerified ? 'verified' : 'unverified',
+                emailVerificationReason: isVerified ? 'High confidence' : 'Low confidence'
+            };
+        }
+        
+        return {
+            ...lead,
+            emailVerified: false,
+            emailVerificationStatus: 'no_email',
+            emailVerificationReason: 'No email generated'
+        };
+    });
+    
+    const verifiedCount = verifiedLeads.filter(lead => lead.emailVerified).length;
+    console.log(`Email verification completed: ${verifiedCount}/${leadsWithEmails.length} verified`);
+    
+    return verifiedLeads;
+}
+
+// Helper function to create final results with all leads
+function createFinalResults(enrichedLeads, invalidLeads, originalLeads) {
+    const finalResults = [];
+    
+    // Add enriched leads
+    enrichedLeads.forEach(lead => {
+        finalResults.push({
+            ...lead,
+            processingStatus: 'completed'
+        });
+    });
+    
+    // Add invalid leads with error info
+    invalidLeads.forEach(invalid => {
+        const originalLead = originalLeads[invalid.originalIndex];
+        finalResults.push({
+            ...originalLead,
+            generatedEmail: null,
+            emailConfidence: 0.0,
+            emailPattern: null,
+            emailReasoning: `Validation failed: ${invalid.errors.join('; ')}`,
+            emailCandidates: [],
+            processingStatus: 'validation_failed',
+            validationErrors: invalid.errors
+        });
+    });
+    
+    // Final summary
+    const totalLeads = originalLeads.length;
+    const validLeads = enrichedLeads.length;
+    const emailsGenerated = enrichedLeads.filter(lead => lead.generatedEmail).length;
+    
+    console.log(`\nFinal Summary:`);
+    console.log(`   Total leads processed: ${totalLeads}`);
+    console.log(`   Passed validation: ${validLeads} (${(validLeads/totalLeads*100).toFixed(1)}%)`);
+    console.log(`   Emails generated: ${emailsGenerated} (${(emailsGenerated/totalLeads*100).toFixed(1)}%)`);
+    
+    if (validLeads > 0) {
+        console.log(`   Success rate on valid data: ${(emailsGenerated/validLeads*100).toFixed(1)}%`);
+    }
+    
+    return finalResults;
 }
 
 // Health check function to verify API is running

@@ -273,7 +273,7 @@ import logging
 EXCEL_INPUT_FILE = "data/input/dard2.xlsx"
 EXCEL_OUTPUT_FILE = "data/output/dard2_with_emails_complete.xlsx"
 API_URL = "http://localhost:8000"
-BATCH_SIZE = 50
+BATCH_SIZE = 25
 REQUEST_DELAY = 0.1
 
 # Setup Windows-compatible logging
@@ -374,7 +374,7 @@ def enrich_leads_with_emails(leads):
                 result = response.json()
                 
                 if result.get('success'):
-                    enriched_leads.extend(result['enriched_leads'])
+                    enriched_leads.extend(result['results'])
                     batch_successful = result.get('successful_generations', 0)
                     batch_failed = result.get('failed_generations', 0)
                     

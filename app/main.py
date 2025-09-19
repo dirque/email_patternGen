@@ -5,6 +5,7 @@ import logging
 from datetime import datetime
 
 from .services.email_generator import EnhancedEmailPatternGenerator
+from .models import LeadInput, EmailResult, BulkEmailResult
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -57,27 +58,29 @@ async def health_check():
         "version": "1.0.0"
     }
 
-@app.post("/generate-email")
-async def generate_single_email(lead_data: dict):
+@app.post("/generate-email", response_model=EmailResult)
+async def generate_single_email(lead: LeadInput):
     """
-    Generate email for a single lead
-    No validation - assumes pre-validated data from Code35
+    Generate email for a single lead with Pydantic validation
     """
     try:
-        logger.info(f"Generating email for {lead_data.get('firstName', 'Unknown')}")
+        logger.info(f"Generating email for {lead.firstName} {lead.lastName or ''}")
+        
+        # Convert validated Pydantic model to dict
+        lead_data = lead.dict()
         
         # Process the lead
         result = email_generator.process_lead_data(lead_data)
         
-        return {
-            "success": True,
-            "lead_data": result,
-            "generated_email": result.get('generatedEmail'),
-            "confidence_score": result.get('emailConfidence', 0.0),
-            "pattern_used": result.get('emailPattern'),
-            "reasoning": result.get('emailReasoning'),
-            "all_candidates": result.get('emailCandidates', [])
-        }
+        return EmailResult(
+            success=True,
+            lead_data=result,
+            generated_email=result.get('generatedEmail'),
+            confidence_score=result.get('emailConfidence', 0.0),
+            pattern_used=result.get('emailPattern'),
+            reasoning=result.get('emailReasoning'),
+            all_candidates=result.get('emailCandidates', [])
+        )
         
     except Exception as e:
         logger.error(f"Error generating email: {str(e)}")
@@ -86,10 +89,10 @@ async def generate_single_email(lead_data: dict):
             detail=f"Failed to generate email: {str(e)}"
         )
 
-@app.post("/enrich-leads-batch")
-async def enrich_leads_batch(leads: List[dict]):
+@app.post("/enrich-leads-batch", response_model=BulkEmailResult)
+async def enrich_leads_batch(leads: List[LeadInput]):
     """
-    Main endpoint for Code35 integration
+    Main endpoint with Pydantic validation for each lead
     Enriches a batch of leads with email data
     """
     if len(leads) > 1000:
@@ -99,23 +102,25 @@ async def enrich_leads_batch(leads: List[dict]):
         )
     
     try:
-        logger.info(f"Processing {len(leads)} leads in batch")
+        logger.info(f"Processing {len(leads)} validated leads in batch")
+        
+        # Convert validated Pydantic models to dicts
+        lead_dicts = [lead.dict() for lead in leads]
         
         # Process all leads
-        enriched_leads = email_generator.process_leads_batch(leads)
+        enriched_leads = email_generator.process_leads_batch(lead_dicts)
         
         # Calculate stats
         successful = len([lead for lead in enriched_leads if lead.get('generatedEmail')])
         failed = len(leads) - successful
         
-        return {
-            "success": True,
-            "total_processed": len(leads),
-            "successful_generations": successful,
-            "failed_generations": failed,
-            "success_rate": f"{(successful/len(leads)*100):.1f}%" if leads else "0%",
-            "enriched_leads": enriched_leads
-        }
+        return BulkEmailResult(
+            success=True,
+            total_processed=len(leads),
+            successful_generations=successful,
+            failed_generations=failed,
+            results=enriched_leads
+        )
         
     except Exception as e:
         logger.error(f"Error in batch processing: {str(e)}")
@@ -124,10 +129,10 @@ async def enrich_leads_batch(leads: List[dict]):
             detail=f"Batch processing failed: {str(e)}"
         )
 
-@app.post("/generate-emails-bulk") 
-async def generate_bulk_emails(leads: List[dict]):
+@app.post("/generate-emails-bulk", response_model=BulkEmailResult)
+async def generate_bulk_emails(leads: List[LeadInput]):
     """
-    Alternative bulk endpoint (same as enrich-leads-batch)
+    Alternative bulk endpoint with validation (same as enrich-leads-batch)
     """
     return await enrich_leads_batch(leads)
 
@@ -140,6 +145,7 @@ async def get_api_stats():
         "api_name": "Email Pattern Generator",
         "version": "1.0.0",
         "status": "operational",
+        "validation": "Pydantic LeadInput model",
         "supported_patterns": [
             "firstname.lastname@domain.com",
             "firstname@domain.com", 
