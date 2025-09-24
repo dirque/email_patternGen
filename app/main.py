@@ -5,6 +5,10 @@ import logging
 from datetime import datetime
 
 from .services.email_generator import EnhancedEmailPatternGenerator
+from .services.email_validator import (
+    EmailValidationService, ValidationConfig, ValidationResult,
+    Hunter_io_Provider, ZeroBounce_Provider, EmailListVerify_Provider, VALIDATION_STRATEGIES
+)
 from .models import LeadInput, EmailResult, BulkEmailResult
 
 # Configure logging
@@ -32,6 +36,10 @@ app.add_middleware(
 # Initialize email generator
 email_generator = EnhancedEmailPatternGenerator()
 
+# Initialize email validation service (configured but no providers yet)
+validation_service = EmailValidationService()
+validation_enabled = False  # Will be enabled when providers are added
+
 @app.get("/")
 async def root():
     """Root endpoint with API info"""
@@ -47,6 +55,9 @@ async def root():
             "all_patterns": "/patterns/all",
             "pattern_demo": "/patterns/demo", 
             "pattern_count": "/patterns/count",
+            "validation_config": "/validation/config",
+            "validation_test": "/validation/test",
+            "generate_with_validation": "/generate-email-validated",
             "api_stats": "/stats",
             "docs": "/docs"
         }
@@ -382,8 +393,337 @@ async def get_pattern_count():
     return {
         "total_patterns_implemented": len(tech_patterns),
         "pattern_names": sorted(list(tech_patterns.keys())),
+        "validation_enabled": validation_enabled,
+        "validation_providers": len(validation_service.providers) if validation_service else 0,
         "message": f"✅ {len(tech_patterns)} email patterns are active and generating candidates"
     }
+
+# =============== EMAIL VALIDATION ENDPOINTS ===============
+
+@app.post("/validation/configure")
+async def configure_validation(config: Dict[str, Any]):
+    """
+    🔧 Configure email validation providers and settings
+    
+    Example request body:
+    {
+        "provider": "hunter_io",
+        "api_key": "your_api_key_here",
+        "strategy": "balanced",
+        "custom_config": {
+            "validate_top_n": 15,
+            "timeout_seconds": 5
+        }
+    }
+    """
+    global validation_enabled, validation_service
+    
+    try:
+        provider_type = config.get("provider", "").lower()
+        api_key = config.get("api_key")
+        strategy = config.get("strategy", "balanced")
+        custom_config = config.get("custom_config", {})
+        
+        if not provider_type or not api_key:
+            raise HTTPException(
+                status_code=400,
+                detail="Both 'provider' and 'api_key' are required"
+            )
+        
+        # Initialize validation service with strategy
+        if strategy in VALIDATION_STRATEGIES:
+            validation_config = VALIDATION_STRATEGIES[strategy]
+        else:
+            validation_config = ValidationConfig(**custom_config)
+        
+        validation_service = EmailValidationService(validation_config)
+        
+        # Add provider
+        if provider_type == "emaillistverify":
+            provider = EmailListVerify_Provider(api_key)
+            validation_service.add_provider(provider)
+        elif provider_type == "hunter_io":
+            provider = Hunter_io_Provider(api_key)
+            validation_service.add_provider(provider)
+        elif provider_type == "zerobounce":
+            provider = ZeroBounce_Provider(api_key)
+            validation_service.add_provider(provider)
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported provider: {provider_type}. Supported: emaillistverify, hunter_io, zerobounce"
+            )
+        
+        validation_enabled = True
+        
+        return {
+            "success": True,
+            "message": f"Validation configured with {provider_type} provider",
+            "strategy": strategy,
+            "config": {
+                "validate_top_n": validation_config.validate_top_n,
+                "validate_all": validation_config.validate_all,
+                "timeout_seconds": validation_config.timeout_seconds,
+                "concurrent_requests": validation_config.concurrent_requests
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Validation configuration error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to configure validation: {str(e)}"
+        )
+
+@app.get("/validation/config")
+async def get_validation_config():
+    """
+    📋 Get current validation configuration and available strategies
+    """
+    return {
+        "validation_enabled": validation_enabled,
+        "providers_configured": len(validation_service.providers) if validation_service else 0,
+        "current_config": {
+            "validate_top_n": validation_service.config.validate_top_n if validation_service else None,
+            "validate_all": validation_service.config.validate_all if validation_service else None,
+            "timeout_seconds": validation_service.config.timeout_seconds if validation_service else None,
+            "concurrent_requests": validation_service.config.concurrent_requests if validation_service else None
+        } if validation_service else None,
+        "available_strategies": {
+            name: {
+                "validate_top_n": strategy.validate_top_n,
+                "validate_all": strategy.validate_all,
+                "timeout_seconds": strategy.timeout_seconds,
+                "concurrent_requests": strategy.concurrent_requests,
+                "description": {
+                    "conservative": "Validates top 10 patterns with conservative timeouts",
+                    "balanced": "Validates top 20 patterns with balanced performance",
+                    "comprehensive": "Validates ALL 50 patterns (slower but complete)",
+                    "fast": "Validates only top 5 patterns for quick results"
+                }.get(name, "Custom strategy")
+            }
+            for name, strategy in VALIDATION_STRATEGIES.items()
+        },
+        "supported_providers": [
+            {
+                "name": "hunter_io",
+                "description": "Hunter.io Email Verifier API",
+                "features": ["deliverability", "catch_all", "disposable", "role_account"]
+            },
+            {
+                "name": "emaillistverify",
+                "description": "EmailListVerify API (Available Now!)",
+                "features": ["deliverability", "basic_validation"],
+                "status": "ready"
+            },
+            {
+                "name": "zerobounce", 
+                "description": "ZeroBounce Email Validation API",
+                "features": ["deliverability", "catch_all", "spam_trap", "abuse"],
+                "status": "available"
+            }
+        ]
+    }
+
+@app.post("/validation/test")
+async def test_validation(request: Dict[str, Any]):
+    """
+    🧪 Test email validation with sample emails
+    
+    Example request:
+    {
+        "emails": ["john.doe@company.com", "jane.smith@startup.io"],
+        "use_top_n_only": false
+    }
+    """
+    if not validation_enabled:
+        raise HTTPException(
+            status_code=400,
+            detail="Email validation not configured. Use POST /validation/configure first."
+        )
+    
+    emails = request.get("emails", [])
+    use_top_n = request.get("use_top_n_only", True)
+    
+    if not emails:
+        raise HTTPException(
+            status_code=400,
+            detail="Please provide 'emails' array with email addresses to test"
+        )
+    
+    try:
+        # Create mock email candidates for validation
+        from .services.email_generator import EmailCandidate
+        mock_candidates = [
+            EmailCandidate(email=email, pattern="test_pattern", confidence_score=0.8, reasoning="Test email")
+            for email in emails
+        ]
+        
+        # Validate emails
+        validation_results = await validation_service.validate_emails(mock_candidates, use_top_n=use_top_n)
+        summary = validation_service.get_validation_summary(validation_results)
+        
+        # Format results
+        formatted_results = []
+        for email, result in validation_results.items():
+            formatted_results.append({
+                "email": result.email,
+                "status": result.status.value,
+                "confidence": result.confidence,
+                "deliverable": result.deliverable,
+                "catch_all": result.catch_all,
+                "disposable": result.disposable,
+                "role_account": result.role_account,
+                "free_provider": result.free_provider,
+                "response_time_ms": result.response_time_ms,
+                "provider": result.provider,
+                "error_message": result.error_message
+            })
+        
+        return {
+            "success": True,
+            "validation_summary": summary,
+            "results": formatted_results,
+            "test_info": {
+                "emails_tested": len(emails),
+                "validation_strategy": "top_n" if use_top_n else "all",
+                "provider_used": validation_service.providers[0].get_provider_name() if validation_service.providers else "none"
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Validation test error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Validation test failed: {str(e)}"
+        )
+
+@app.post("/generate-email-validated", response_model=Dict[str, Any])
+async def generate_email_with_validation(lead: LeadInput, validation_params: Dict[str, Any] = None):
+    """
+    🚀 Generate email patterns AND validate them using external API
+    
+    This is the SUPER LOOP you wanted - generates all patterns then validates top N or all
+    
+    Example request body:
+    {
+        "firstName": "John",
+        "lastName": "Doe", 
+        "companyDomain": "company.com",
+        "companyIndustry": "Technology"
+    }
+    
+    Query params or validation_params:
+    - validate_top_n: true (default) - validate only top ranked patterns
+    - validate_all: false (default) - set true to validate all 50 patterns
+    """
+    if not validation_enabled:
+        raise HTTPException(
+            status_code=400,
+            detail="Email validation not configured. Use POST /validation/configure first to set up API provider."
+        )
+    
+    try:
+        # Step 1: Generate all email patterns (original 50-pattern generation)
+        logger.info(f"Generating and validating email for {lead.firstName} {lead.lastName or ''}")
+        
+        lead_data = lead.dict()
+        generation_result = email_generator.process_lead_data(lead_data)
+        email_candidates = generation_result.get('emailCandidates', [])
+        
+        if not email_candidates:
+            raise HTTPException(
+                status_code=500,
+                detail="No email patterns could be generated for this lead"
+            )
+        
+        # Step 2: Validate emails using the configured strategy
+        validation_params = validation_params or {}
+        use_top_n = not validation_params.get("validate_all", False)
+        
+        logger.info(f"Starting validation for {len(email_candidates)} generated patterns")
+        
+        # Convert to validation format
+        from .services.email_generator import EmailCandidate as GenEmailCandidate
+        validation_candidates = [
+            GenEmailCandidate(
+                email=candidate['email'],
+                pattern=candidate['pattern'], 
+                confidence_score=candidate['confidence'],
+                reasoning=candidate.get('reasoning', '')
+            )
+            for candidate in email_candidates
+        ]
+        
+        # Perform validation
+        validation_results = await validation_service.validate_emails(validation_candidates, use_top_n=use_top_n)
+        validation_summary = validation_service.get_validation_summary(validation_results)
+        
+        # Step 3: Merge generation + validation results
+        enhanced_candidates = []
+        for candidate in email_candidates:
+            email = candidate['email']
+            validation_result = validation_results.get(email)
+            
+            enhanced_candidate = {
+                **candidate,
+                "validation": {
+                    "validated": validation_result is not None,
+                    "status": validation_result.status.value if validation_result else "not_validated",
+                    "deliverable": validation_result.deliverable if validation_result else None,
+                    "confidence_boost": 0.0,
+                    "validation_confidence": validation_result.confidence if validation_result else 0.0,
+                    "catch_all": validation_result.catch_all if validation_result else None,
+                    "disposable": validation_result.disposable if validation_result else None,
+                    "role_account": validation_result.role_account if validation_result else None,
+                    "response_time_ms": validation_result.response_time_ms if validation_result else 0
+                } if validation_result else {
+                    "validated": False,
+                    "status": "not_validated", 
+                    "deliverable": None,
+                    "confidence_boost": 0.0
+                }
+            }
+            
+            # Boost confidence for validated deliverable emails
+            if validation_result and validation_result.deliverable:
+                boost = 0.2 if validation_result.status.value == "valid" else 0.1
+                enhanced_candidate["confidence"] = min(1.0, candidate["confidence"] + boost)
+                enhanced_candidate["validation"]["confidence_boost"] = boost
+            
+            enhanced_candidates.append(enhanced_candidate)
+        
+        # Re-sort by enhanced confidence (after validation boost)
+        enhanced_candidates.sort(key=lambda x: x["confidence"], reverse=True)
+        
+        # Update top recommendation based on validation
+        top_candidate = enhanced_candidates[0]
+        
+        return {
+            "success": True,
+            "lead_data": generation_result,
+            "generated_email": top_candidate["email"],
+            "confidence_score": top_candidate["confidence"],
+            "pattern_used": top_candidate["pattern"],
+            "reasoning": top_candidate.get("reasoning", ""),
+            "validation_enhanced": True,
+            "validation_summary": validation_summary,
+            "all_candidates": enhanced_candidates,
+            "validation_info": {
+                "total_patterns_generated": len(email_candidates),
+                "patterns_validated": len(validation_results),
+                "validation_strategy": "all_patterns" if validation_params.get("validate_all") else f"top_{validation_service.config.validate_top_n}",
+                "deliverable_found": any(r.deliverable for r in validation_results.values()),
+                "provider_used": validation_service.providers[0].get_provider_name() if validation_service.providers else "unknown"
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in validated email generation: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate and validate email: {str(e)}"
+        )
 
 if __name__ == "__main__":
     import uvicorn
