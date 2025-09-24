@@ -13,9 +13,9 @@ logger = logging.getLogger(__name__)
 
 # Initialize FastAPI app
 app = FastAPI(
-    title="Email Pattern Generator API",
-    description="Generate professional email addresses using advanced pattern recognition and confidence scoring",
-    version="1.0.0",
+    title="Enhanced Email Pattern Generator API",
+    description="Generate professional email addresses using 50 advanced patterns with research-based confidence scoring, industry-specific optimizations, and domain correlation analysis",
+    version="2.0.0",
     docs_url="/docs",
     redoc_url="/redoc"
 )
@@ -39,7 +39,7 @@ async def root():
         "status": "healthy",
         "message": "Email Pattern Generator API is running",
         "timestamp": datetime.now(),
-        "version": "1.0.0",
+        "version": "2.0.0",
         "endpoints": {
             "health": "/health",
             "single_email": "/generate-email",
@@ -55,7 +55,7 @@ async def health_check():
         "status": "healthy",
         "message": "All systems operational",
         "timestamp": datetime.now(),
-        "version": "1.0.0"
+        "version": "2.0.0"
     }
 
 @app.post("/generate-email", response_model=EmailResult)
@@ -139,23 +139,73 @@ async def generate_bulk_emails(leads: List[LeadInput]):
 @app.get("/stats")
 async def get_api_stats():
     """
-    Simple API stats
+    Enhanced API stats showing 50-pattern capabilities
     """
     return {
-        "api_name": "Email Pattern Generator",
-        "version": "1.0.0",
+        "api_name": "Enhanced Email Pattern Generator",
+        "version": "2.0.0",
         "status": "operational",
         "validation": "Pydantic LeadInput model",
-        "supported_patterns": [
-            "firstname.lastname@domain.com",
-            "firstname@domain.com", 
-            "f.lastname@domain.com",
-            "firstnamelastname@domain.com",
-            "firstname_lastname@domain.com"
-        ],
-        "supported_industries": [
-            "Technology", "Fintech", "Finance", 
-            "Consulting", "Healthcare", "Manufacturing"
+        "total_patterns": 50,
+        "pattern_categories": {
+            "basic_name_standards": [
+                "firstname@domain.com",
+                "lastname@domain.com", 
+                "firstname.lastname@domain.com",
+                "firstname_lastname@domain.com",
+                "firstname-lastname@domain.com",
+                "f.lastname@domain.com",
+                "firstname.l@domain.com",
+                "flastname@domain.com",
+                "lastnamef@domain.com",
+                "lastname.firstname@domain.com"
+            ],
+            "extended_middle_initials": [
+                "firstname.middlename.lastname@domain.com",
+                "firstname.m.lastname@domain.com",
+                "f.m.lastname@domain.com",
+                "firstname+middlename+lastname@domain.com"
+            ],
+            "abbreviated_shortened": [
+                "first3letterslastname@domain.com",
+                "first4letterslastname@domain.com",
+                "nickname.lastname@domain.com",
+                "fn.lastname@domain.com"
+            ],
+            "numeric_variants": [
+                "firstname.lastname1@domain.com",
+                "firstname1@domain.com",
+                "firstname.lastname01@domain.com",
+                "firstname.lastnameYY@domain.com"
+            ],
+            "international_multilingual": [
+                "transliteratedfirstname.lastname@domain.com",
+                "firstname.x.lastname@domain.com"
+            ]
+        },
+        "supported_industries": {
+            "technology": "High confidence for tech patterns like abbreviated names",
+            "education": "Specialized for .edu domains with high firstname.lastname confidence",
+            "finance": "Formal patterns with strong f.lastname usage",
+            "consulting": "Professional patterns similar to finance",
+            "healthcare": "Standard business patterns",
+            "government": "Formal government patterns optimized for .gov domains",
+            "nonprofit": "Patterns optimized for .org domains",
+            "traditional": "Standard business patterns for manufacturing, retail"
+        },
+        "domain_optimization": {
+            ".edu": "Education-specific pattern weighting",
+            ".org": "Nonprofit-optimized patterns", 
+            ".gov": "Government formal patterns",
+            ".com": "Business standard patterns",
+            ".io/.tech/.ai": "Tech startup patterns"
+        },
+        "confidence_factors": [
+            "Pattern-industry correlation (45%)",
+            "Domain quality score (25%)", 
+            "Name quality score (15%)",
+            "Pattern-domain correlation bonus (15%)",
+            "Company size modifier (5%)"
         ]
     }
 
