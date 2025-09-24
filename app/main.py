@@ -7,7 +7,7 @@ from datetime import datetime
 from .services.email_generator import EnhancedEmailPatternGenerator
 from .services.email_validator import (
     EmailValidationService, ValidationConfig, ValidationResult,
-    Hunter_io_Provider, ZeroBounce_Provider, VALIDATION_STRATEGIES
+    Hunter_io_Provider, ZeroBounce_Provider, EmailListVerify_Provider, VALIDATION_STRATEGIES
 )
 from .models import LeadInput, EmailResult, BulkEmailResult
 
@@ -439,7 +439,10 @@ async def configure_validation(config: Dict[str, Any]):
         validation_service = EmailValidationService(validation_config)
         
         # Add provider
-        if provider_type == "hunter_io":
+        if provider_type == "emaillistverify":
+            provider = EmailListVerify_Provider(api_key)
+            validation_service.add_provider(provider)
+        elif provider_type == "hunter_io":
             provider = Hunter_io_Provider(api_key)
             validation_service.add_provider(provider)
         elif provider_type == "zerobounce":
@@ -448,7 +451,7 @@ async def configure_validation(config: Dict[str, Any]):
         else:
             raise HTTPException(
                 status_code=400,
-                detail=f"Unsupported provider: {provider_type}. Supported: hunter_io, zerobounce"
+                detail=f"Unsupported provider: {provider_type}. Supported: emaillistverify, hunter_io, zerobounce"
             )
         
         validation_enabled = True
@@ -508,9 +511,16 @@ async def get_validation_config():
                 "features": ["deliverability", "catch_all", "disposable", "role_account"]
             },
             {
+                "name": "emaillistverify",
+                "description": "EmailListVerify API (Available Now!)",
+                "features": ["deliverability", "basic_validation"],
+                "status": "ready"
+            },
+            {
                 "name": "zerobounce", 
                 "description": "ZeroBounce Email Validation API",
-                "features": ["deliverability", "catch_all", "spam_trap", "abuse"]
+                "features": ["deliverability", "catch_all", "spam_trap", "abuse"],
+                "status": "available"
             }
         ]
     }
